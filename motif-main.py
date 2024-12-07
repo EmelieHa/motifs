@@ -114,7 +114,9 @@ Saves the result as sorted_unique_topics.tsv
 """
 
 
-# Load the TXT file containing novel titles and periods
+import pandas as pd
+
+# Load the TXT/TSV file containing novel titles and periods
 novel_titles_file = '[input txt/tsv-file]'
 novel_titles_df = pd.read_csv(novel_titles_file, sep='\t')
 
@@ -151,10 +153,24 @@ for index, row in df.iterrows():
             all_matches.append(new_row)
 
 # Step 3: Create an expanded DataFrame
-expanded_df = pd.DataFrame(all_matches)
+if all_matches:
+    expanded_df = pd.DataFrame(all_matches)
+
+    # Merge the original DataFrame with the expanded matches
+    df = df.merge(
+        expanded_df[['custom_id', 'period', 'novel_source']],
+        on='custom_id',
+        how='left',
+        suffixes=('', '_expanded')
+    )
+
+    # Fill new columns with expanded data
+    df['period'] = df['period_expanded'].combine_first(df['period'])
+    df['novel_source'] = df['novel_source_expanded'].combine_first(df['novel_source'])
+    df.drop(columns=['period_expanded', 'novel_source_expanded'], inplace=True)
 
 # Step 4: Handle unmatched rows (optional)
-unmatched = df[~df['custom_id'].isin(expanded_df['custom_id'])]
+unmatched = df[df['period'].isnull()]
 if not unmatched.empty:
     unmatched_log_file = 'unmatched_custom_ids.log'
     unmatched.to_csv(unmatched_log_file, sep='\t', index=False)
@@ -168,13 +184,12 @@ def sort_motif(motif):
     except ValueError:
         return float('inf')
 
-expanded_df['motif_sort_key'] = expanded_df['topic_id'].apply(sort_motif)
+df['motif_sort_key'] = df['topic_id'].apply(sort_motif)
 
-# Step 6: Write the sorted DataFrame to a new TSV file
-output_file = 'sorted_unique_topics.tsv'
-expanded_df.sort_values(by='motif_sort_key').drop(columns=['motif_sort_key']).to_csv(output_file, sep='\t', index=False)
+# Step 6: Save the updated DataFrame back to the same file
+df.sort_values(by='motif_sort_key').drop(columns=['motif_sort_key']).to_csv(input_file, sep='\t', index=False)
+print(f"Updated file '{input_file}' has been saved with new columns.")
 
-print(f"File '{output_file}' has been created.")
 
 
 """ This cell takes the input file, collects all the motif belonging to the same topic, and sends them as a list to 
