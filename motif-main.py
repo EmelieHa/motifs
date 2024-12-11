@@ -1,3 +1,86 @@
+""" This cell presupposes a tsv file with three columns: ID, TEXT and PRECEDING CONTEXT. 
+It sends each row of text with corresponding context to the fine-tuned language model which extracts the motifs.
+The result is saved in a tsv file.
+"""
+
+import transformers
+import torch
+from peft import PeftModel, PeftConfig
+import pandas as pd
+
+# Define paths to the model and TSV files
+base_model_path = "/mimer/NOBACKUP/groups/naiss2024-22-361/Eric_Pap/Llama-3.1-8B-Instruct"  # Change if needed
+adapter_model_path = "Ericu950/LlamaMotifs"
+input_tsv_path = "novels.tsv"  # Path to input TSV file
+output_tsv_path = "/mimer/NOBACKUP/groups/naiss2024-22-361/output_file.tsv"  # Path to output TSV file
+
+# Load the tokenizer and model
+tokenizer = transformers.AutoTokenizer.from_pretrained(base_model_path)
+model = transformers.LlamaForCausalLM.from_pretrained(base_model_path, torch_dtype=torch.bfloat16, device_map="auto")
+peft_config = PeftConfig.from_pretrained(adapter_model_path)
+model = PeftModel.from_pretrained(model, adapter_model_path)
+
+# Create the pipeline
+pipeline = transformers.pipeline(
+    "text-generation",
+    model=model,
+    tokenizer=tokenizer,
+    device_map="auto",
+)
+
+def process_row(row):
+    text = row['TEXT']
+    preceding_context = row['PRECEDING CONTEXT']
+
+    # Define the message with text and preceding context
+    messages = [
+        {"role": "system", "content": "Extract topics from this text. Do not include topics from the context but take it into account."},
+        {"role": "user", "content": f"##Text\n{text}\n##Preceding Context\n{preceding_context}"}
+    ]
+
+    # Run the pipeline
+    outputs = pipeline(
+        messages,
+        max_new_tokens=128,
+        num_beams=5,
+        early_stopping=True
+    )
+
+    # Print the raw output for debugging
+    print("Generated output:", outputs)
+
+  # Extract motifs from the generated output
+    if isinstance(outputs, list) and 'generated_text' in outputs[0]:
+        assistant_content = outputs[0]['generated_text'][-1]['content']
+        motifs = [line.strip() for line in assistant_content.splitlines() if line.strip()]
+    else:
+        motifs = []  # Default to an empty list if no valid output is produced
+
+   
+
+    return motifs
+
+
+# Load the input TSV file
+df = pd.read_csv(input_tsv_path, sep="\t")
+
+# Open the output TSV file for writing
+with open(output_tsv_path, mode='w', newline='', encoding='utf-8') as output_file:
+    # Write the header
+    output_file.write("\t".join(df.columns.tolist() + ["motifs"]) + "\n")
+
+    # Process each row and extract motifs
+    for _, row in df.iterrows():
+        motifs = process_row(row)
+        motifs_joined = "\n".join(motifs)
+
+        # Write the original row and the extracted motifs to the output file
+        output_file.write("\t".join(row.astype(str).tolist() + [motifs_joined]) + "\n")
+
+
+
+
+
 """This cell reads the original tsv file with source text, context and corresponding motifs.
 Saves it to clean_topics.tsv which retains two columns: topic, and custom_id
 """
@@ -22,7 +105,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 # Define the file paths
-input_file = "[input tsv-file]"  # Input TSV file path
+input_file = "output_file.tsv"  # Input TSV file path
 output_file = "clean_topics.tsv"  # Output TSV file path
 
 # Function to process the TSV file and output topics in the desired format
