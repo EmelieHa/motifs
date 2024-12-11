@@ -284,7 +284,7 @@ The result is saved as clustered_meta_motifs_with_general_motifs
 
 
 # Load the TSV file
-file_path = "sorted_unique_topics.tsv"
+file_path = 'clustered_topics.tsv'
 df = pd.read_csv(file_path, sep='\t')
 
 
