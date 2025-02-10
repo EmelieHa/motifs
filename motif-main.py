@@ -1,96 +1,13 @@
-""" This cell presupposes a tsv file with three columns: ID, TEXT and PRECEDING CONTEXT. 
-It sends each row of text with corresponding context to the fine-tuned language model which extracts the motifs.
-The result is saved in a tsv file.
-"""
+#Import necessary libraries
 
 import transformers
 import torch
 from peft import PeftModel, PeftConfig
 import pandas as pd
-
-# Define paths to the model and TSV files
-base_model_path = "/mimer/NOBACKUP/groups/naiss2024-22-361/Eric_Pap/Llama-3.1-8B-Instruct"  # Change if needed
-adapter_model_path = "Ericu950/LlamaMotifs"
-input_tsv_path = "novels.tsv"  # Path to input TSV file
-output_tsv_path = "/mimer/NOBACKUP/groups/naiss2024-22-361/output_file.tsv"  # Path to output TSV file
-
-# Load the tokenizer and model
-tokenizer = transformers.AutoTokenizer.from_pretrained(base_model_path)
-model = transformers.LlamaForCausalLM.from_pretrained(base_model_path, torch_dtype=torch.bfloat16, device_map="auto")
-peft_config = PeftConfig.from_pretrained(adapter_model_path)
-model = PeftModel.from_pretrained(model, adapter_model_path)
-
-# Create the pipeline
-pipeline = transformers.pipeline(
-    "text-generation",
-    model=model,
-    tokenizer=tokenizer,
-    device_map="auto",
-)
-
-def process_row(row):
-    text = row['TEXT']
-    preceding_context = row['PRECEDING CONTEXT']
-
-    # Define the message with text and preceding context
-    messages = [
-        {"role": "system", "content": "Extract topics from this text. Do not include topics from the context but take it into account."},
-        {"role": "user", "content": f"##Text\n{text}\n##Preceding Context\n{preceding_context}"}
-    ]
-
-    # Run the pipeline
-    outputs = pipeline(
-        messages,
-        max_new_tokens=128,
-        num_beams=5,
-        early_stopping=True
-    )
-
-    # Print the raw output for debugging
-    print("Generated output:", outputs)
-
-  # Extract motifs from the generated output
-    if isinstance(outputs, list) and 'generated_text' in outputs[0]:
-        assistant_content = outputs[0]['generated_text'][-1]['content']
-        motifs = [line.strip() for line in assistant_content.splitlines() if line.strip()]
-    else:
-        motifs = []  # Default to an empty list if no valid output is produced
-
-   
-
-    return motifs
-
-
-# Load the input TSV file
-df = pd.read_csv(input_tsv_path, sep="\t")
-
-# Open the output TSV file for writing
-with open(output_tsv_path, mode='w', newline='', encoding='utf-8') as output_file:
-    # Write the header
-    output_file.write("\t".join(df.columns.tolist() + ["motifs"]) + "\n")
-
-    # Process each row and extract motifs
-    for _, row in df.iterrows():
-        motifs = process_row(row)
-        motifs_joined = "\n".join(motifs)
-
-        # Write the original row and the extracted motifs to the output file
-        output_file.write("\t".join(row.astype(str).tolist() + [motifs_joined]) + "\n")
-
-
-
-
-
-"""This cell reads the original tsv file with source text, context and corresponding motifs.
-Saves it to clean_topics.tsv which retains two columns: topic, and custom_id
-"""
-
-# Import necessary libraries
 import os
 import csv
 import torch
 import ast
-import pandas as pd
 import networkx as nx
 import matplotlib.pyplot as plt
 import umap
@@ -99,20 +16,27 @@ from sentence_transformers import SentenceTransformer
 from bertopic import BERTopic
 from hdbscan import HDBSCAN
 from umap import UMAP
+import numpy as np
 from transformers import pipeline
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
+
+import csv
+
 # Define the file paths
-input_file = "output_file.tsv"  # Input TSV file path
-output_file = "clean_topics.tsv"  # Output TSV file path
+input_file = "themebot_answers.tsv"  # Input TSV file path
+output_file = "1_clean_topics.tsv"  # Output TSV file path
 
 # Function to process the TSV file and output topics in the desired format
 def process_file(input_file, output_file):
     with open(input_file, 'r', encoding='utf-8') as infile, open(output_file, 'w', encoding='utf-8') as outfile:
         reader = csv.reader(infile, delimiter='\t')
         writer = csv.writer(outfile, delimiter='\t')
+        
+        # Skip the header in the input file
+        next(reader, None)  
         
         # Write header for TSV
         writer.writerow(["topic", "custom_id"])
@@ -134,15 +58,9 @@ process_file(input_file, output_file)
 print(f"Processing complete. The output has been written to {output_file}")
 
 
-"""This cell uses a sentence transformer for English to cluster the motifs.
-Parameters can be adjusted accordingly.
-Saves to the file clustered_topics.tsv which has three columns: topic, custom_id and topic_id.
-Also creates a visualization of the clustering and saves it as topic_visualization.png.
-"""
 
 
-# Load the TSV file
-file_path = "clean_topics.tsv"
+file_path = "1_clean_topics.tsv"
 df = pd.read_csv(file_path, sep='\t')
 
 # Initialize the sentence transformer model for embeddings
@@ -153,7 +71,7 @@ motif_embeddings = model.encode(df['topic'].astype(str), show_progress_bar=True)
 
 
 # Initialize UMAP with adjusted parameters
-umap_model = UMAP(n_neighbors=10, n_components=5, metric='cosine', min_dist=0.09)
+umap_model = UMAP(n_neighbors=5, n_components=5, metric='cosine', min_dist=0.09)
 
 # Initialize HDBSCAN with adjusted parameters
 hdbscan_model = HDBSCAN(min_cluster_size=10, min_samples=10, metric='euclidean', cluster_selection_method='eom', prediction_data=True, allow_single_cluster=False)
@@ -169,7 +87,7 @@ topics, probs = topic_model.fit_transform(df['topic'].astype(str), motif_embeddi
 df['topic_id'] = topics
 
 # Save the resulting DataFrame into a new TSV file
-output_file = "clustered_topics.tsv"
+output_file = "2_clustered_topics.tsv"
 df.to_csv(output_file, sep='\t', index=False)
 
 # Display the topics found
@@ -180,32 +98,27 @@ print(topic_info)
 visualization = topic_model.visualize_topics()
 
 # Save the visualization as an HTML file
-html_output_file = "topic_visualization.html"
+html_output_file = "3_topic_visualization.html"
 visualization.write_html(html_output_file)
 
 # Save the visualization as an image (requires kaleido package)
-image_output_file = "topic_visualization.png"
+image_output_file = "4_topic_visualization.png"
 visualization.write_image(image_output_file, format="png")
 
 print(f"Visualization saved as {html_output_file} and {image_output_file}")
 
 
-"""
-This cell adds extra information to the tsv file, (in this case time periods for the different titles), and normalizes 
-titles to make them more convenient. It also sorts the motifs in numerical order with -1 at the bottom.
-Saves the result as sorted_unique_topics.tsv
-"""
 
 
 import pandas as pd
 
 # Load the TXT/TSV file containing novel titles and periods
-novel_titles_file = '[input txt/tsv-file]'
+novel_titles_file = 'novel_titles.txt'
 novel_titles_df = pd.read_csv(novel_titles_file, sep='\t')
 
 # Precompute a mapping of substring matches
 substring_map = {}
-for index, row in novel_titles_df.iterrows():
+for _, row in novel_titles_df.iterrows():
     substring_map.setdefault(row['custom_id'], []).append((row['period'], row['novel_key']))
 
 # Function to assign all matching 'period' and 'novel_key' based on precomputed mapping
@@ -214,83 +127,95 @@ def get_period_and_source(custom_id):
     for key, values in substring_map.items():
         if key in custom_id:  # Check if `key` is a substring of `custom_id`
             matches.extend(values)
-    return pd.DataFrame(matches, columns=['period', 'novel_key']) if matches else pd.DataFrame(columns=['period', 'novel_key'])
+    return matches
 
 # Load the TSV file with clustered topics
-input_file = 'clustered_topics.tsv'
+input_file = '2_clustered_topics.tsv'
 df = pd.read_csv(input_file, sep='\t')
 
-# Step 1: Initialize new columns for 'period' and 'novel_source'
-df['period'] = None
-df['novel_source'] = None
+# Step 1: Initialize a list to collect all expanded rows
+all_expanded_rows = []
 
-# Step 2: Process all rows and expand for multiple matches
-all_matches = []
-for index, row in df.iterrows():
-    matches = get_period_and_source(row['custom_id'])
-    if not matches.empty:
-        for _, match in matches.iterrows():
-            new_row = row.copy()
-            new_row['period'] = match['period']
-            new_row['novel_source'] = match['novel_key']
-            all_matches.append(new_row)
+# Step 2: Expand each row for multiple matches
+for _, row in df.iterrows():
+    custom_id = row['custom_id']
+    matches = get_period_and_source(custom_id)
+    
+    if matches:
+        for period, novel_key in matches:
+            expanded_row = row.copy()
+            expanded_row['period'] = period
+            expanded_row['novel_source'] = novel_key
+            all_expanded_rows.append(expanded_row)
+    else:
+        # Add the row as-is if no matches are found
+        row['period'] = None
+        row['novel_source'] = None
+        all_expanded_rows.append(row)
 
-# Step 3: Create an expanded DataFrame
-if all_matches:
-    expanded_df = pd.DataFrame(all_matches)
+# Step 3: Create a DataFrame from expanded rows
+expanded_df = pd.DataFrame(all_expanded_rows)
 
-    # Merge the original DataFrame with the expanded matches
-    df = df.merge(
-        expanded_df[['custom_id', 'period', 'novel_source']],
-        on='custom_id',
-        how='left',
-        suffixes=('', '_expanded')
-    )
+# Step 4: Remove duplicate rows, if any
+expanded_df.drop_duplicates(inplace=True)
 
-    # Fill new columns with expanded data
-    df['period'] = df['period_expanded'].combine_first(df['period'])
-    df['novel_source'] = df['novel_source_expanded'].combine_first(df['novel_source'])
-    df.drop(columns=['period_expanded', 'novel_source_expanded'], inplace=True)
+# Save the expanded DataFrame to a new TSV file
+output_file = '2_clustered_topics.tsv'
+expanded_df.to_csv(output_file, sep='\t', index=False)
 
-# Step 4: Handle unmatched rows (optional)
-unmatched = df[df['period'].isnull()]
-if not unmatched.empty:
-    unmatched_log_file = 'unmatched_custom_ids.log'
-    unmatched.to_csv(unmatched_log_file, sep='\t', index=False)
-    print(f"Unmatched custom IDs have been logged to '{unmatched_log_file}'.")
+print(f"Processing complete. Expanded data saved to {output_file}")
 
-# Step 5: Sort motifs numerically, treating '-1' as the last value
+
+
+
+
+import pandas as pd
+
+# Input and output file paths
+input_file = "2_clustered_topics.tsv"
+output_file = "5_sorted_topics.tsv"
+
+# Load the TSV file into a DataFrame
+df = pd.read_csv(input_file, sep='\t')
+
+# Define the function to sort motifs
 def sort_motif(motif):
     try:
         motif_value = int(motif)
+        # If the motif is -1, assign it the largest possible value (infinity)
         return float('inf') if motif_value == -1 else motif_value
     except ValueError:
+        # If motif is not an integer, return infinity (for non-numeric motifs)
         return float('inf')
 
+# Apply the sort_motif function to the 'topic_id' column and create a new column 'motif_sort_key'
 df['motif_sort_key'] = df['topic_id'].apply(sort_motif)
 
-# Step 6: Save the updated DataFrame back to the same file
-df.sort_values(by='motif_sort_key').drop(columns=['motif_sort_key']).to_csv(input_file, sep='\t', index=False)
-print(f"Updated file '{input_file}' has been saved with new columns.")
+# Sort the DataFrame by the 'motif_sort_key' column
+df_sorted = df.sort_values(by='motif_sort_key')
+
+# Optionally, drop the 'motif_sort_key' column if it's no longer needed
+df_sorted = df_sorted.drop(columns=['motif_sort_key'])
+
+# Save the sorted DataFrame to a new TSV file
+df_sorted.to_csv(output_file, sep='\t', index=False)
+
+print(f"Processing complete. Sorted topics saved to {output_file}")
 
 
 
-""" This cell takes the input file, collects all the motif belonging to the same topic, and sends them as a list to 
-the language model Llama-3.1-8B-Instruct (change it accordingly). The model is given a prompt that instructs it to
-label the cluster as convenient as possible (change prompt accordingly). 
-The result is saved as clustered_meta_motifs_with_general_motifs
 
-"""
 
+import pandas as pd
+from transformers import pipeline
+import torch
 
 # Load the TSV file
-file_path = 'clustered_topics.tsv'
+file_path = '5_sorted_topics.tsv'
 df = pd.read_csv(file_path, sep='\t')
 
-
-
 # Model setup for sending clusters to language model
-model_id = 'meta-llama/Llama-3.1-8B-Instruct'
+model_id = '/mimer/NOBACKUP/groups/naiss2024-22-361/Eric_Pap/Llama-3.1-8B-Instruct'
 pipe = pipeline(
     "text-generation",
     model=model_id,
@@ -326,9 +251,17 @@ def send_topics_to_model(topics):
     return outputs[0]['generated_text']
 
 # Prepare the output file and write the header
-output_file = "clustered_meta_motifs_with_general_motifs.tsv"
+output_file = "6_labelled_motifs.tsv"
 with open(output_file, 'w') as f_out:
-    f_out.write("period\tnovel\ttopic\ttopic_id\tgeneral_motif\n")  # Adjust header as per the columns
+    # Check if 'period' exists in the DataFrame and prepare header accordingly
+    headers = ["period", "novel", "topic", "topic_id", "general_motif"]
+    
+    # Include other columns from the original DataFrame if they exist
+    extra_columns = [col for col in df.columns if col not in headers]
+    headers.extend(extra_columns)
+    
+    # Write the header to the output file
+    f_out.write("\t".join(headers) + "\n")
 
 # Process each unique topic_id (including -1) and generate a general motif
 for topic_id in df['topic_id'].unique():
@@ -338,17 +271,39 @@ for topic_id in df['topic_id'].unique():
     # Send to the model for a general motif
     general_motif = send_topics_to_model(topics)
     
-    # Write each row corresponding to this topic_id directly to the file
+    # Now, open the file once and write all the rows for this topic_id
     with open(output_file, 'a') as f_out:
         for _, row in df[df['topic_id'] == topic_id].iterrows():
-            f_out.write(f"{row['period']}\t{row['novel_source']}\t{row['topic']}\t{row['topic_id']}\t{general_motif}\n")
+            # For each row, handle the 'period' column if it doesn't exist
+            period = row.get('period', None)  # Default to None if 'period' doesn't exist
+            novel_source = row.get('novel_source', None)
+            topic = row.get('topic', None)
+            topic_id = row.get('topic_id', None)
+            
+            # Prepare the line to be written to the file
+            line = [str(period), str(novel_source), str(topic), str(topic_id), str(general_motif)]
+            
+            # Add any extra columns
+            for col in extra_columns:
+                line.append(str(row.get(col, "")))
+            
+            # Ensure all elements in line are strings before joining
+            line = [str(item) if not isinstance(item, list) else ", ".join(map(str, item)) for item in line]
+            
+            # Write the line to the file
+            f_out.write("\t".join(line) + "\n")
 
 print(f"File with general motifs is being written to: {output_file}")
 
 
 
+
+
+import pandas as pd
+import ast
+
 # Load the TSV file
-df = pd.read_csv('clustered_meta_motifs_with_general_motifs.tsv', sep='\t')
+df = pd.read_csv('6_labelled_motifs.tsv', sep='\t')
 
 # Function to extract the general motif from the 'general_motif' column
 def extract_general_motif(motif_str):
@@ -373,8 +328,12 @@ df['topic_id'] = pd.to_numeric(df['topic_id'], errors='coerce')
 df['topic_count'] = df.groupby('topic_id')['topic_id'].transform('count')
 df = df.sort_values(by=['topic_count', 'topic_id'], ascending=[False, True]).drop(columns=['topic_count'])
 
+# Ensure the 'period' column exists, otherwise create a placeholder column
+if 'period' not in df.columns:
+    df['period'] = None  # Or you can set a default value if needed
+
 # Output file path
-output_file = 'extracted_general_motifs.tsv'
+output_file = '7_extracted_motifs.tsv'
 
 # Write the sorted data to the output file with the specified column order
 df[['period', 'novel', 'topic', 'topic_id', 'general_motif', 'extracted_general_motif']].to_csv(
@@ -384,15 +343,10 @@ df[['period', 'novel', 'topic', 'topic_id', 'general_motif', 'extracted_general_
 print(f"Extracted and sorted general motifs have been saved to '{output_file}'.")
 
 
-"""
-This file prints the number of text chunks pertaining to each time period, except topic -1. It prints a list of
-the biggest motifs that are shared by the highest number of source texts, collected from the 40 biggest motifs overall.
-
-"""
 
 
 # Load the extracted general motifs TSV file
-df_extracted = pd.read_csv('extracted_general_motifs.tsv', sep='\t')
+df_extracted = pd.read_csv('7_extracted_motifs.tsv', sep='\t')
 
 # Step 3: Count the number of text chunks for each period
 period_counts = df_extracted['period'].value_counts()
@@ -441,11 +395,11 @@ def analyze_shared_topics(df):
             if row not in results:
                 results.append(row)
 
-    # Sort results first by count and then by total_count
+     # Sort results first by count and then by total_count
     sorted_results = sorted(results, key=lambda x: (-len(x.novel), -x.total_count))
 
     # Print the final results (up to 40 topics)
-    print("Top 40 topics shared by novels:")
+    print("\n\nTop 40 topics shared by novels:")
     for row in sorted_results[:40]:
         print(f"- {row.extracted_general_motif} (Shared by: {', '.join(row.novel)}) - Total Count: {row.total_count}")
 
@@ -453,15 +407,11 @@ def analyze_shared_topics(df):
 analyze_shared_topics(df_extracted)
 
 
-"""
-This cell prints out some information about the results. First it filters out topic -1 as that is not interesting.
-It prints out the 40 most common motifs (according to size) plus their total counts.
-Then it calculates and prints the relatively most unique three motifs for each novel in the corpus.
-"""
+
 
 
 # Load the data (assuming a TSV file)
-df = pd.read_csv('extracted_general_motifs.tsv', sep='\t')
+df = pd.read_csv('7_extracted_motifs.tsv', sep='\t')
 
 # Exclude rows where topic_id is -1
 df = df[df['topic_id'] != -1]
@@ -522,81 +472,160 @@ relative_unique_motifs(df)
 print_top_40_motifs_with_counts(df)
 
 
+import pandas as pd
+import numpy as np
+import umap
+import networkx as nx
+from sklearn.preprocessing import normalize
+from sklearn.metrics.pairwise import cosine_similarity
+import matplotlib.pyplot as plt
 
-
-def create_compressed_graph(input_file, output_file="compressed_novel_network_graph.png", top_motifs=40):
+def create_full_graph(input_file, output_file="full_novel_network_graph.png"):
+    # Step 1: Load data
     df = pd.read_csv(input_file, sep='\t')
 
-    # Step 1: Select the 40 biggest motifs
-    motif_counts = df['topic_id'].value_counts()
-    top_motifs = motif_counts.nlargest(top_motifs).index
-
-    # Step 2: Create a matrix where rows are novels and columns are motifs
+    # Step 2: Create a matrix where rows are novels and columns are all motifs
     novels = df['novel'].unique()
+    motifs = df['topic_id'].unique()
 
     novel_to_index = {novel: i for i, novel in enumerate(novels)}
-    topic_to_index = {topic: i for i, topic in enumerate(top_motifs)}
+    motif_to_index = {motif: i for i, motif in enumerate(motifs)}
 
-    # Create a feature matrix based on the top motifs
-    feature_matrix = np.zeros((len(novels), len(top_motifs)))
+    # Initialize the feature matrix
+    feature_matrix = np.zeros((len(novels), len(motifs)))
     for _, row in df.iterrows():
-        if row['topic_id'] in top_motifs:
-            novel_idx = novel_to_index[row['novel']]
-            topic_idx = topic_to_index[row['topic_id']]
-            feature_matrix[novel_idx, topic_idx] += 1
+        novel_idx = novel_to_index[row['novel']]
+        motif_idx = motif_to_index[row['topic_id']]
+        feature_matrix[novel_idx, motif_idx] += 1
 
     # Step 3: Normalize rows (novels) to represent proportions
     normalized_matrix = normalize(feature_matrix, axis=1, norm='l1')
 
-    # Step 4: Dimensionality reduction using UMAP (adjust parameters for compression)
-    reducer = umap.UMAP(n_neighbors=10, min_dist=0.01, n_components=2, metric='cosine')
+    # Step 4: Perform dimensionality reduction using UMAP
+    reducer = umap.UMAP(
+        n_neighbors=10,
+        min_dist=0.001,
+        n_components=2,
+        metric='cosine',
+        random_state=42  # Fixing random state for consistency
+    )
     reduced_matrix = reducer.fit_transform(normalized_matrix)
 
-    # Step 5: Create the graph with node positions based on UMAP output
+    # Step 5: Calculate pairwise similarity between novels
+    pairwise_sim = cosine_similarity(normalized_matrix)
+
+    # Compute similarity statistics, ignoring self-similarity
+    np.fill_diagonal(pairwise_sim, 0)  # Set diagonal to 0 to ignore self-similarity
+    similarity_df = pd.DataFrame(pairwise_sim, index=novels, columns=novels)
+
+    # Get top most similar pairs and ensure no duplicates (order does not matter)
+    most_similar_pairs = []
+    seen_pairs = set()  # Track pairs to avoid duplicates
+
+    most_similar = similarity_df.stack().nlargest(10).items()  # Search through top pairs
+
+    for (novel1, novel2), similarity in most_similar:
+        if novel1 != novel2:  # Avoid self-similarity
+            # Sort the pair to ensure (A, B) == (B, A)
+            pair = tuple(sorted((novel1, novel2)))  
+            if pair not in seen_pairs:
+                # Find shared motifs (optional logic as before)
+                shared_motif = df[(df['novel'] == novel1) | (df['novel'] == novel2)]['extracted_general_motif'].mode()
+                most_similar_pairs.append((novel1, novel2, similarity, shared_motif[0] if not shared_motif.empty else 'N/A'))
+                seen_pairs.add(pair)  # Mark this pair as seen
+        if len(most_similar_pairs) == 3:  # Stop after collecting 3 pairs
+            break
+
+    # Step 6: Identify least shared motifs (at least 10 occurrences)
+    motif_counts = feature_matrix.sum(axis=0)
+    least_shared_motifs_indices = np.where(motif_counts >= 10)[0]  # Only motifs with 10+ occurrences
+    least_shared_motifs_indices = least_shared_motifs_indices[np.argsort(motif_counts[least_shared_motifs_indices])[:10]]
+
+    # Extract corresponding motifs and their novels
+    extracted_least_shared_motifs = []
+    for motif_id in least_shared_motifs_indices:
+        motif = list(motif_to_index.keys())[motif_id]
+        motif_data = df[df['topic_id'] == motif]['extracted_general_motif'].iloc[0]
+        novels_with_motif = df[df['topic_id'] == motif]['novel'].unique()
+        extracted_least_shared_motifs.append((motif, motif_data, ", ".join(novels_with_motif)))
+
+    # Step 7: Create the graph
     G = nx.Graph()
+
+    # Add nodes with their attributes
     for i, novel in enumerate(novels):
-        G.add_node(novel, pos=reduced_matrix[i], time_period=df[df['novel'] == novel]['period'].iloc[0])
+        period = df[df['novel'] == novel]['period'].iloc[0]
+        G.add_node(novel, pos=reduced_matrix[i], time_period=period)
 
-    # Step 6: Visualization
-    pos = nx.get_node_attributes(G, 'pos')
-    node_colors = [G.nodes[node]['time_period'] for node in G]
+    # Add edges based on similarity
+    for i in range(len(novels)):
+        for j in range(i + 1, len(novels)):
+            similarity = pairwise_sim[i, j]
+            if similarity > 0.1:  # Threshold to include meaningful edges
+                G.add_edge(novels[i], novels[j], weight=similarity * 5)
 
-    # Create a colormap for time periods
-    unique_periods = list(set(node_colors))
-    cmap = plt.cm.get_cmap('tab10', len(unique_periods))
-    color_map = {period: cmap(i) for i, period in enumerate(unique_periods)}
-    node_colors = [color_map[period] for period in node_colors]
-
+    # Convert UMAP reduced_matrix to a dictionary for positions
+    pos = {novels[i]: reduced_matrix[i] for i in range(len(novels))}
+    # Step 8: Draw the network with nodes colored by time period
     plt.figure(figsize=(20, 10))
+    node_colors = [G.nodes[n]['time_period'] for n in G.nodes()]
+    unique_periods = list(set(node_colors))
+    color_map = plt.cm.get_cmap('tab10', len(unique_periods))  # Use a colormap
+    color_dict = {period: color_map(i) for i, period in enumerate(unique_periods)}
 
-    # Draw the network with nodes only
     nx.draw_networkx(
         G,
         pos,
         with_labels=True,
-        node_size=1000,  # Slightly larger node size for visibility
+        node_size=500,
         font_size=8,
-        node_color=node_colors,  # Node colors based on time period
+        node_color=[color_dict[G.nodes[n]['time_period']] for n in G.nodes()],
+        edge_color='gray',
+        width=[G[u][v]['weight'] for u, v in G.edges()],  # Thickness based on weights
     )
- 
-
-    plt.title("Compressed Vector-Based Network Graph of Novels")
-    
-    # Save the graph to the specified output file
+    plt.title("Full Vector-Based Network Graph of Novels")
     plt.savefig(output_file, format='png', bbox_inches='tight')
     plt.show()
 
-# Run the function with the path to your input file
-create_compressed_graph("extracted_general_motifs.tsv", "compressed_novel_network_graph.png")
+   # Step 9: Output similarity statistics
+    print("Novel pairs sorted by similarity scores (most similar at the top):")
+
+    # Create a list of all novel pairs with their similarity scores
+    pairwise_sim_list = [
+        (novel1, novel2, pairwise_sim[i, j])
+        for i, novel1 in enumerate(novels)
+        for j, novel2 in enumerate(novels)
+        if i < j  # Avoid duplicates and self-pairs
+    ]
+
+    # Sort the list by similarity score in descending order
+    pairwise_sim_list = sorted(pairwise_sim_list, key=lambda x: x[2], reverse=True)
+
+    # Print the pairs
+    for novel1, novel2, similarity in pairwise_sim_list:
+        print(f"{novel1} and {novel2}: similarity {similarity:.2f}")
 
 
-"""
-This cell, and the following one, creates bar charts with selected motifs displaying the most fluctuating and most persistent motifs 
-compared between the time periods. The motifs are represented by their numbers and can be changed accordingly.
-"""
+    print("\nLeast shared motifs (Top 10 with at least 10 occurrences):")
+    for motif, motif_data, novels in extracted_least_shared_motifs:
+        print(f"Motif {motif}: {motif_data}, found in novels: {novels}")
+
+    # Save similarity matrix to a CSV file for further analysis
+    similarity_df.to_csv("novel_similarity_matrix.csv")
+
+# Example usage
+create_full_graph("7_extracted_motifs.tsv", "full_novel_network_graph.png")
+
+
+
+
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
 
 # Load the data
-df = pd.read_csv('extracted_general_motifs.tsv', sep='\t')
+df = pd.read_csv('7_extracted_motifs.tsv', sep='\t')
 
 # Filter out topic_id -1
 df_filtered = df[df['topic_id'] != -1]
@@ -604,25 +633,58 @@ df_filtered = df[df['topic_id'] != -1]
 # Calculate the total number of text chunks per period
 total_chunks_per_period = df.groupby('period').size()
 
-# Select specific motif IDs and filter the data
-selected_motifs = [3, 4, 10, 19, 21]
-df_selected_motifs = df_filtered[df_filtered['topic_id'].isin(selected_motifs)]
-
-# Aggregate counts by period for the selected motifs
-motif_counts_by_period = df_selected_motifs.groupby(['period', 'topic_id']).size().unstack(fill_value=0)
+# Aggregate counts by period for all motifs
+motif_counts_by_period = df_filtered.groupby(['period', 'topic_id']).size().unstack(fill_value=0)
 
 # Normalize counts by the total number of chunks per period
 relative_motif_counts = motif_counts_by_period.div(total_chunks_per_period, axis=0)
 
+# Sum across periods to get the total count per motif
+total_motif_counts = motif_counts_by_period.sum(axis=0)
+
+# Select the top 40 motifs with the highest total frequency across all periods
+top_40_motifs = total_motif_counts.nlargest(40).index.tolist()
+
+# Filter the relative motif counts to include only the top 40 motifs
+relative_motif_counts_top_40 = relative_motif_counts[top_40_motifs]
+
+# Calculate the fluctuation (standard deviation) and persistence (mean) for each motif
+fluctuations = relative_motif_counts_top_40.std(axis=0)  # Fluctuation is measured by standard deviation
+persistences = relative_motif_counts_top_40.mean(axis=0)  # Persistence is measured by mean
+
+# Select the top 10 fluctuating motifs (top 5 including motif 0)
+top_fluctuating_motifs = fluctuations.nlargest(10).index.tolist()
+top_persistent_motifs = persistences.nlargest(10).index.tolist()
+
+# Combine fluctuating and persistent motifs into one set to ensure no duplicates
+combined_top_motifs = list(set(top_fluctuating_motifs + top_persistent_motifs))
+
+# Fill fluctuating motifs (ensure at least 5)
+fluctuating_motifs = top_fluctuating_motifs[:5]
+if len(fluctuating_motifs) < 5:
+    additional_motifs = [m for m in combined_top_motifs if m not in fluctuating_motifs][:5 - len(fluctuating_motifs)]
+    fluctuating_motifs.extend(additional_motifs)
+
+# Fill persistent motifs (ensure at least 5)
+persistent_motifs = [m for m in top_persistent_motifs if m not in fluctuating_motifs][:5]
+if len(persistent_motifs) < 5:
+    additional_motifs = [m for m in combined_top_motifs if m not in (fluctuating_motifs + persistent_motifs)][:5 - len(persistent_motifs)]
+    persistent_motifs.extend(additional_motifs)
+
+# Ensure 5 motifs per chart
+assert len(fluctuating_motifs) == 5, "Could not create 5 fluctuating motifs."
+assert len(persistent_motifs) == 5, "Could not create 5 persistent motifs."
+
+
 # Extract motif legends for the selected motifs, truncating if necessary
 motif_legends = (
-    df[df['topic_id'].isin(selected_motifs)]
+    df[df['topic_id'].isin(fluctuating_motifs + persistent_motifs)]
     .groupby('topic_id')['extracted_general_motif']
     .first()  # Get the first legend for each motif
     .apply(lambda x: x[:50] + '...' if len(x) > 50 else x)  # Truncate if longer than 50 characters
 )
 
-# Create the bar chart
+# Create the bar chart for fluctuating motifs
 fig, ax = plt.subplots(figsize=(14, 8))
 
 # Set the positions for the groups and bars
@@ -630,13 +692,13 @@ x_positions = np.arange(len(relative_motif_counts.index))  # Positions for time 
 bar_width = 0.15  # Width of each bar
 colors = ['blue', 'green', 'orange', 'red', 'purple']  # Colors for motifs
 
-# Plot each motif as a group of bars
-for i, motif in enumerate(selected_motifs):
+# Plot each fluctuating motif as a group of bars
+for i, motif in enumerate(fluctuating_motifs):
     ax.bar(
         x_positions + i * bar_width,  # Adjust position for each motif
         relative_motif_counts[motif],  # Heights of the bars
         bar_width,
-        label=f"{motif}: {motif_legends[motif]}",  # Add motif ID and legend
+        label=f"Fluct {motif}: {motif_legends[motif]}",  # Add motif ID and legend
         color=colors[i % len(colors)]  # Cycle through colors
     )
 
@@ -644,7 +706,7 @@ for i, motif in enumerate(selected_motifs):
 ax.set_title('Most Fluctuating Motifs', fontsize=16)
 ax.set_xlabel('Time Period', fontsize=12)
 ax.set_ylabel('Relative Frequency', fontsize=12)
-ax.set_xticks(x_positions + (len(selected_motifs) - 1) * bar_width / 2)  # Center the labels
+ax.set_xticks(x_positions + (len(fluctuating_motifs) - 1) * bar_width / 2)  # Center the labels
 ax.set_xticklabels(relative_motif_counts.index)  # Time period labels
 ax.legend(title='Motif ID', fontsize=9, loc='upper right')  # Add legend with smaller font size
 ax.grid(axis='y', linestyle='--', alpha=0.7)
@@ -654,53 +716,47 @@ filename = 'most_fluctuating_motifs_bar_chart.png'
 plt.savefig(filename, bbox_inches='tight', dpi=300)
 print(f"Saved plot as {filename}")
 
+# Fluctuation graph customization remains unchanged...
+
+# Show and save the plot
+plt.show()
+filename = 'most_fluctuating_motifs_bar_chart.png'
+plt.savefig(filename, bbox_inches='tight', dpi=300)
+print(f"Saved plot as {filename}")
+
+# Print fluctuation scores for the top 5 fluctuating motifs
+print("\nFluctuation Scores for Most Fluctuating Motifs:")
+for motif in fluctuating_motifs:
+    print(f"Motif {motif}: Std. Dev. = {fluctuations[motif]:.4f}")
+
+
 # Show the plot
 plt.show()
 
+# Persistence graph customization remains unchanged...
+
+# Show and save the plot
+plt.show()
+filename = 'most_persistent_motifs_bar_chart.png'
+plt.savefig(filename, bbox_inches='tight', dpi=300)
+print(f"Saved plot as {filename}")
+
+# Print persistence scores for the top 5 persistent motifs
+print("\nPersistence Scores for Most Persistent Motifs:")
+for motif in persistent_motifs:
+    print(f"Motif {motif}: Mean = {persistences[motif]:.4f}")
 
 
-# Load the data
-df = pd.read_csv('extracted_general_motifs.tsv', sep='\t')
-
-# Filter out topic_id -1
-df_filtered = df[df['topic_id'] != -1]
-
-# Calculate the total number of text chunks per period
-total_chunks_per_period = df.groupby('period').size()
-
-# Select specific motif IDs and filter the data
-selected_motifs = [0, 1, 2, 9, 13]
-df_selected_motifs = df_filtered[df_filtered['topic_id'].isin(selected_motifs)]
-
-# Aggregate counts by period for the selected motifs
-motif_counts_by_period = df_selected_motifs.groupby(['period', 'topic_id']).size().unstack(fill_value=0)
-
-# Normalize counts by the total number of chunks per period
-relative_motif_counts = motif_counts_by_period.div(total_chunks_per_period, axis=0)
-
-# Extract motif legends for the selected motifs, truncating if necessary
-motif_legends = (
-    df[df['topic_id'].isin(selected_motifs)]
-    .groupby('topic_id')['extracted_general_motif']
-    .first()  # Get the first legend for each motif
-    .apply(lambda x: x[:50] + '...' if len(x) > 50 else x)  # Truncate if longer than 50 characters
-)
-
-# Create the bar chart
+# Create the bar chart for persistent motifs
 fig, ax = plt.subplots(figsize=(14, 8))
 
-# Set the positions for the groups and bars
-x_positions = np.arange(len(relative_motif_counts.index))  # Positions for time periods
-bar_width = 0.15  # Width of each bar
-colors = ['blue', 'green', 'orange', 'red', 'purple']  # Colors for motifs
-
-# Plot each motif as a group of bars
-for i, motif in enumerate(selected_motifs):
+# Plot each persistent motif as a group of bars
+for i, motif in enumerate(persistent_motifs):
     ax.bar(
         x_positions + i * bar_width,  # Adjust position for each motif
         relative_motif_counts[motif],  # Heights of the bars
         bar_width,
-        label=f"{motif}: {motif_legends[motif]}",  # Add motif ID and legend
+        label=f"Persist {motif}: {motif_legends[motif]}",  # Add motif ID and legend
         color=colors[i % len(colors)]  # Cycle through colors
     )
 
@@ -708,7 +764,7 @@ for i, motif in enumerate(selected_motifs):
 ax.set_title('Most Persistent Motifs', fontsize=16)
 ax.set_xlabel('Time Period', fontsize=12)
 ax.set_ylabel('Relative Frequency', fontsize=12)
-ax.set_xticks(x_positions + (len(selected_motifs) - 1) * bar_width / 2)  # Center the labels
+ax.set_xticks(x_positions + (len(persistent_motifs) - 1) * bar_width / 2)  # Center the labels
 ax.set_xticklabels(relative_motif_counts.index)  # Time period labels
 ax.legend(title='Motif ID', fontsize=9, loc='upper right')  # Add legend with smaller font size
 ax.grid(axis='y', linestyle='--', alpha=0.7)
@@ -720,6 +776,21 @@ print(f"Saved plot as {filename}")
 
 # Show the plot
 plt.show()
+
+
+
+import pandas as pd
+
+# Load the data
+df = pd.read_csv('7_extracted_motifs.tsv', sep='\t')
+
+# Get unique motifs and their respective counts from the 'extracted_general_motif' column
+motif_counts = df['extracted_general_motif'].value_counts()
+
+# Pretty print unique motifs with their total counts
+print("Unique Motifs and their Counts from 'extracted_general_motif' column:")
+for idx, (motif, count) in enumerate(motif_counts.items(), start=1):
+    print(f"{idx}. {motif} - {count} occurrences")
 
 
 
